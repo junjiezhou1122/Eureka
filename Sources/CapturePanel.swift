@@ -347,9 +347,14 @@ class CapturePanel: NSObject, NSTextStorageDelegate {
         let qY = sv.frame.origin.y + 2
         ql.frame = NSMakeRect(16, qY, pw - 32, 16)
 
-        // Resize to dots phase
+        // Compact loading state: the question starts at the same top inset as
+        // the final answer instead of inheriting the selected-text preview gap.
+        let topPadding: CGFloat = 16
+        let questionH: CGFloat = 16
+        let questionToDots: CGFloat = 12
         let dotsH: CGFloat = 20
-        let totalH = quoteOffsetFromTop + 16 + 12 + dotsH + 12
+        let footerH: CGFloat = 12
+        let totalH = topPadding + questionH + questionToDots + dotsH + footerH
 
         var frame = p.frame
         let dy = totalH - frame.size.height
@@ -358,11 +363,12 @@ class CapturePanel: NSObject, NSTextStorageDelegate {
         p.setFrame(frame, display: true)
         c.frame = NSMakeRect(0, 0, pw, totalH)
 
-        repositionTopElements(totalH)
-        let newQY = totalH - quoteOffsetFromTop - 16 - 12
-        ql.frame = NSMakeRect(16, newQY, pw - 32, 16)
+        ctxBoxView?.isHidden = true
+        quoteLabel?.isHidden = true
+        let newQY = totalH - topPadding - questionH
+        ql.frame = NSMakeRect(16, newQY, pw - 32, questionH)
 
-        sv.frame = NSMakeRect(16, 12, pw - 32, dotsH)
+        sv.frame = NSMakeRect(16, footerH, pw - 32, dotsH)
         sv.wantsLayer = true
         sv.layer?.masksToBounds = true
         tv.isEditable = false
@@ -485,47 +491,7 @@ class CapturePanel: NSObject, NSTextStorageDelegate {
     }
 
     private static func renderMarkdown(_ text: String) -> NSAttributedString {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 3
-        paragraph.paragraphSpacing = 4
-        let baseFont = NSFont.systemFont(ofSize: 13)
-        let codeFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-        let rendered: NSMutableAttributedString
-
-        if let parsed = try? AttributedString(
-            markdown: text,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
-            rendered = NSMutableAttributedString(attributedString: NSAttributedString(parsed))
-        } else {
-            rendered = NSMutableAttributedString(string: text)
-        }
-
-        let fullRange = NSRange(location: 0, length: rendered.length)
-        rendered.addAttributes([
-            .font: baseFont,
-            .foregroundColor: EU.body,
-            .paragraphStyle: paragraph
-        ], range: fullRange)
-
-        rendered.enumerateAttribute(.inlinePresentationIntent, in: fullRange) { value, range, _ in
-            guard let rawValue = (value as? NSNumber)?.intValue else { return }
-            if rawValue & Int(InlinePresentationIntent.stronglyEmphasized.rawValue) != 0 {
-                rendered.addAttribute(.font, value: NSFont.systemFont(ofSize: 13, weight: .semibold), range: range)
-            } else if rawValue & Int(InlinePresentationIntent.emphasized.rawValue) != 0 {
-                rendered.addAttribute(.font, value: NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask), range: range)
-            }
-            if rawValue & Int(InlinePresentationIntent.code.rawValue) != 0 {
-                rendered.addAttributes([
-                    .font: codeFont,
-                    .backgroundColor: NSColor(white: 0.94, alpha: 1)
-                ], range: range)
-            }
-            if rawValue & Int(InlinePresentationIntent.strikethrough.rawValue) != 0 {
-                rendered.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range)
-            }
-            rendered.removeAttribute(.inlinePresentationIntent, range: range)
-        }
-        return rendered
+        MarkdownRenderer.render(text)
     }
 
     private static func styledQuestion(_ text: String) -> NSAttributedString {
@@ -548,6 +514,9 @@ class CapturePanel: NSObject, NSTextStorageDelegate {
 
     var isOpen: Bool { panel != nil }
 
+    /// Fired on every dismissal path; the owner uses it to cancel in-flight work.
+    var onClose: (() -> Void)?
+
     func close() {
         fputs("[Eureka] CapturePanel.close()\n", stderr)
         dotsTimer?.invalidate(); dotsTimer = nil
@@ -560,6 +529,7 @@ class CapturePanel: NSObject, NSTextStorageDelegate {
         isAIMode = false
         if let m = escMonitor { NSEvent.removeMonitor(m); escMonitor = nil }
         if let m = clickMonitor { NSEvent.removeMonitor(m); clickMonitor = nil }
+        onClose?()
     }
 
     static func truncate(_ s: String, max: Int) -> String {
